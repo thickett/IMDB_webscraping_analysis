@@ -1,6 +1,8 @@
 # IMDB_webscraping_analysis
 ## Project overview
-xxxxxxxxxxxxxxxx
+*add overview here*
+
+
 The project was split into three main sections:
 ## 1) Web scraping 
 * created from scratch a web scraper in R that could:
