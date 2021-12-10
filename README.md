@@ -14,4 +14,4 @@ The project was split into three main sections:
 * extracted important information from complex strings to create tidy, informative variables using custom made functions.
 * feature engineered new variables to present the data in a more meaningful way.
 * made decisions on how to correctly navigate missing and incorrect data.
-* ensured data integratity was maintained throughout 
+* ensured data integratity was maintained throughout. 
