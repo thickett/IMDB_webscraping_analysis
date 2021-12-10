@@ -15,3 +15,4 @@ The project was split into three main sections:
 * feature engineered new variables to present the data in a more meaningful way.
 * made decisions on how to correctly navigate missing and incorrect data.
 * ensured data integratity was maintained throughout. 
+* ![](https://github.com/thickett/IMDB_webscraping_analysis/blob/main/images/cleaning_example.PNG)
