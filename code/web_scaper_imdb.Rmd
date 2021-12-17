@@ -1,0 +1,157 @@
+---
+title: "IMDB_Movie_scraper_Full"
+author: "Callum Thickett"
+date: "13/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##setup environment.
+
+```{r}
+library(rvest)
+library(tidyverse)
+library(writexl)
+library(lubridate)
+library(XML)
+library(data.table)
+```
+
+##create inital dataframe that we will appened with our scraper function
+```{r}
+Movies_raw <- data.frame(matrix(ncol = 3,nrow = 0))
+cols<- c("name","year","rating")
+colnames(Movies_raw) <-cols
+```
+
+## main scraper function
+```{r}
+scraper <-function(n_movies) {
+  page_number <- 1
+  for (i in 1:as.integer(n_movies/50)) {
+    link <- paste("https://www.imdb.com/search/title/?title_type=feature&release_date=1970-01-01,&num_votes=2000,&has=alternate-versions&certificates=US%3AG,US%3APG,US%3APG-13,US%3AR,US%3ANC-17&languages=en&sort=user_rating,desc&start=",page_number,"&ref_=adv_nxt",sep="")
+    page <- read_html(link)
+    
+    name = page %>% html_nodes(".lister-item-header a") %>% html_text()
+
+year = page %>%  html_nodes(".text-muted.unbold") %>%  html_text()
+
+rating = page %>% html_nodes (".ratings-imdb-rating strong") %>%  html_text()
+    
+##get individual movie links:
+movie_links = page %>% html_nodes(".lister-item-header a") %>%
+  html_attr("href") %>% substr(., 1, 16) %>%
+  paste("https://www.imdb.com", ., "/reference" , sep = "")
+
+
+## function to get data from each of the generated movie links.
+
+get_inner <- function(movie_link) {
+
+  movie_page <- read_html(movie_link)
+  cast = movie_page %>% 
+    html_nodes(".itemprop .itemprop") %>% 
+    html_text() %>%
+    .[1:5] %>%
+    paste(collapse = ",")
+  
+  synopsis <- movie_page %>%
+    html_nodes(".titlereference-section-overview div:nth-child(1)") %>%
+    html_text()
+  
+  genre1 <- movie_page %>% 
+    html_nodes(".titlereference-header .ipl-inline-list__item:nth-child(3) a:nth-child(1)") %>% 
+    html_text()
+  
+  genre2 <-movie_page %>% 
+    html_nodes(".titlereference-header a+ a") %>% 
+    html_text()
+  
+  imdb_votes <- movie_page %>% 
+    html_nodes(".ipl-rating-star__total-votes") %>% 
+    html_text()
+  
+  director <- movie_page %>% 
+    html_nodes("hr+ .titlereference-overview-section a") %>% 
+    html_text()
+  
+  awards <-  movie_page %>% 
+    html_nodes(".titlereference-overview-section:nth-child(6) .ipl-inline-list__item:nth-child(1)") %>% 
+    html_text() 
+  
+  budget <- movie_page %>% 
+    html_nodes(".titlereference-section-box-office .ipl-zebra-list__item:nth-child(1) .ipl-zebra-list__label+ td") %>% 
+    html_text() 
+  
+  opening_weekend <- movie_page %>% 
+    html_nodes(".titlereference-section-box-office .ipl-zebra-list__item:nth-child(2) .ipl-zebra-list__label+ td") %>% 
+    html_text()
+  
+  gross_world <- movie_page %>% 
+    html_nodes(".titlereference-section-box-office .ipl-zebra-list__item~ .ipl-zebra-list__item+ .ipl-zebra-list__item .ipl-zebra-list__label+ td") %>% 
+    html_text() 
+  
+  run_time <- movie_page %>% 
+    html_nodes(".titlereference-section-additional-details .ipl-zebra-list__item:nth-child(2) .ipl-inline-list__item") %>% 
+    html_text()
+    
+  return(c(genre1[1],genre2[1],cast,synopsis[1],imdb_votes[1],director[1],awards[1],
+           budget[1],opening_weekend[1],gross_world[1],run_time[1]))
+  
+  
+}
+movie_inner_mat = sapply(movie_links, get_inner, USE.NAMES = FALSE)
+
+movie_inner_df = as.data.frame(t(movie_inner_mat))
+
+##clean movie_inner_df to account for movies with only one recorded genre.
+# without this converting to a data frame wont work (records will be too long 
+# since genre2 returns a vector (due to issues with the css code))
+
+
+  movie_inner_df$V2 <-sub("\n", NA, x = movie_inner_df$V2)
+
+    
+   Movies_raw_temp = data.frame(
+  name = name,
+  year = year,
+  rating = rating,
+  genre1 = movie_inner_df$V1,
+  genre2 = movie_inner_df$V2,
+  cast = movie_inner_df$V3,
+  synopsis = movie_inner_df$V4,
+  imdb_votes = movie_inner_df$V5,
+  director = movie_inner_df$V6,
+  awards = movie_inner_df$V7,
+  budget = movie_inner_df$V8,
+  opening_weekend = movie_inner_df$V9,
+  gross_world = movie_inner_df$V10,
+  run_time = movie_inner_df$V11,
+  stringsAsFactors =
+    FALSE
+) 
+    
+
+
+    Movies_raw <- rbind(Movies_raw,Movies_raw_temp)
+    
+    page_number <-page_number+50
+     ## percent complete tracker
+     pct_complete <-paste(floor((page_number/n_movies)*100),"% complete")
+    print(pct_complete)
+
+  
+  }
+  return(Movies_raw)
+}
+Movies_raw <- scraper(3400)
+```
+
+## export Movies_raw to a 
+
+```{r}
+write.csv(Movies_raw,file="Movies_raw.csv",row.names = FALSE)
+```
+
