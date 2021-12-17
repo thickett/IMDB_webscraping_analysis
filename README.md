@@ -7,8 +7,8 @@ The project was split into three main sections:
 ### 1) Web Scraping 
 * Created from scratch a web scraper in R that could:
   * Successfully scrape data from multiple pages and subpages. 
-  * Collate the collected data into a tidy dataframe.
-* Produced a simple web scraper for currency convertion rates for data cleaning.
+  * Collate the collected data into a tidy dataframe with thousands on records.
+* Produced several web scraperers to solve data cleaning problems. 
 
 ### 2) Data Cleaning
 * Extracted important information from complex strings to create tidy, informative variables using custom made functions.
