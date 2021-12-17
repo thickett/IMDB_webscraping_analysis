@@ -1,0 +1,575 @@
+---
+title: "IMDB_Movie_scraper_Full"
+author: "Callum Thickett"
+date: "13/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##setup environment.
+
+```{r}
+library(rvest)
+library(tidyverse)
+library(writexl)
+library(lubridate)
+library(XML)
+library(data.table)
+```
+
+##create inital dataframe that we will appened with our scraper function
+```{r}
+Movies_raw <- data.frame(matrix(ncol = 3,nrow = 0))
+cols<- c("name","year","rating")
+colnames(Movies_raw) <-cols
+```
+
+## main scraper function
+```{r}
+scraper <-function(n_movies) {
+  page_number <- 1
+  for (i in 1:as.integer(n_movies/50)) {
+    link <- paste("https://www.imdb.com/search/title/?title_type=feature&release_date=1970-01-01,&num_votes=2000,&has=alternate-versions&certificates=US%3AG,US%3APG,US%3APG-13,US%3AR,US%3ANC-17&languages=en&sort=user_rating,desc&start=",page_number,"&ref_=adv_nxt",sep="")
+    page <- read_html(link)
+    
+    name = page %>% html_nodes(".lister-item-header a") %>% html_text()
+
+year = page %>%  html_nodes(".text-muted.unbold") %>%  html_text()
+
+rating = page %>% html_nodes (".ratings-imdb-rating strong") %>%  html_text()
+    
+##get individual movie links:
+movie_links = page %>% html_nodes(".lister-item-header a") %>%
+  html_attr("href") %>% substr(., 1, 16) %>%
+  paste("https://www.imdb.com", ., "/reference" , sep = "")
+
+
+## function to get data from each of the generated movie links.
+
+get_inner <- function(movie_link) {
+
+  movie_page <- read_html(movie_link)
+  cast = movie_page %>% 
+    html_nodes(".itemprop .itemprop") %>% 
+    html_text() %>%
+    .[1:5] %>%
+    paste(collapse = ",")
+  
+  synopsis <- movie_page %>%
+    html_nodes(".titlereference-section-overview div:nth-child(1)") %>%
+    html_text()
+  
+  genre1 <- movie_page %>% 
+    html_nodes(".titlereference-header .ipl-inline-list__item:nth-child(3) a:nth-child(1)") %>% 
+    html_text()
+  
+  genre2 <-movie_page %>% 
+    html_nodes(".titlereference-header a+ a") %>% 
+    html_text()
+  
+  imdb_votes <- movie_page %>% 
+    html_nodes(".ipl-rating-star__total-votes") %>% 
+    html_text()
+  
+  director <- movie_page %>% 
+    html_nodes("hr+ .titlereference-overview-section a") %>% 
+    html_text()
+  
+  awards <-  movie_page %>% 
+    html_nodes(".titlereference-overview-section:nth-child(6) .ipl-inline-list__item:nth-child(1)") %>% 
+    html_text() 
+  
+  budget <- movie_page %>% 
+    html_nodes(".titlereference-section-box-office .ipl-zebra-list__item:nth-child(1) .ipl-zebra-list__label+ td") %>% 
+    html_text() 
+  
+  opening_weekend <- movie_page %>% 
+    html_nodes(".titlereference-section-box-office .ipl-zebra-list__item:nth-child(2) .ipl-zebra-list__label+ td") %>% 
+    html_text()
+  
+  gross_world <- movie_page %>% 
+    html_nodes(".titlereference-section-box-office .ipl-zebra-list__item~ .ipl-zebra-list__item+ .ipl-zebra-list__item .ipl-zebra-list__label+ td") %>% 
+    html_text() 
+  
+  run_time <- movie_page %>% 
+    html_nodes(".titlereference-section-additional-details .ipl-zebra-list__item:nth-child(2) .ipl-inline-list__item") %>% 
+    html_text()
+    
+  return(c(genre1[1],genre2[1],cast,synopsis[1],imdb_votes[1],director[1],awards[1],
+           budget[1],opening_weekend[1],gross_world[1],run_time[1]))
+  
+  
+}
+movie_inner_mat = sapply(movie_links, get_inner, USE.NAMES = FALSE)
+
+movie_inner_df = as.data.frame(t(movie_inner_mat))
+
+##clean movie_inner_df to account for movies with only one recorded genre.
+# without this converting to a data frame wont work (records will be too long 
+# since genre2 returns a vector (due to issues with the css code))
+
+
+  movie_inner_df$V2 <-sub("\n", NA, x = movie_inner_df$V2)
+
+    
+   Movies_raw_temp = data.frame(
+  name = name,
+  year = year,
+  rating = rating,
+  genre1 = movie_inner_df$V1,
+  genre2 = movie_inner_df$V2,
+  cast = movie_inner_df$V3,
+  synopsis = movie_inner_df$V4,
+  imdb_votes = movie_inner_df$V5,
+  director = movie_inner_df$V6,
+  awards = movie_inner_df$V7,
+  budget = movie_inner_df$V8,
+  opening_weekend = movie_inner_df$V9,
+  gross_world = movie_inner_df$V10,
+  run_time = movie_inner_df$V11,
+  stringsAsFactors =
+    FALSE
+) 
+    
+
+
+    Movies_raw <- rbind(Movies_raw,Movies_raw_temp)
+    
+    page_number <-page_number+50
+     ## percent complete tracker
+     pct_complete <-paste(floor((page_number/n_movies)*100),"% complete")
+    print(pct_complete)
+
+  
+  }
+  return(Movies_raw)
+}
+Movies_raw <- scraper(3400)
+```
+
+## export Movies_raw to a 
+
+```{r}
+write.csv(Movies_raw,file="Movies_raw.csv",row.names = FALSE)
+```
+
+#  data cleaning
+
+first, create a copy to work on.
+
+```{r}
+Movies_Clean <- Movies_raw
+```
+
+clean the year variable
+```{r}
+## remove the parentheses in year and convert to a date format.
+year_cleaner <- function(date) {
+  date <- as.integer(gsub("[^0-9]","",date))
+  
+}
+Movies_Clean$year <-year_cleaner(Movies_Clean$year)
+  
+
+```
+
+clean the rating variable 
+```{r}
+Movies_Clean$rating <- as.numeric(Movies_Clean$rating)
+
+```
+
+
+
+##generic function for removing commas and parentheses
+```{r}
+
+extra_char_cleaner <- function(x,as.numeric=FALSE) {
+  x <- gsub("[(),a-b]","",x)
+  if (as.numeric==TRUE){
+    as.numeric(x)
+  }
+
+  }
+```
+
+cleaned the votes variable
+```{r}
+Movies_Clean$imdb_votes <- extra_char_cleaner(Movies_Clean$imdb_votes, 
+                                              as.numeric =TRUE )
+```
+
+### cleaning budgets variable.
+
+
+here we have budgets in a variety of currencies, i will convert them all to USD through use of  a webscraper. 
+
+
+first we need to remove free space from the budget.
+
+```{r}
+Movies_Clean$budget <-str_trim(Movies_Clean$budget)
+
+```
+scrape all possible currency codes. then we can just see which of these exist in our dataframe.
+
+```{r}
+currency_codes_link<-"https://www.iban.com/currency-codes"
+currency_codes_page <- read_html(currency_codes_link)
+currency_codes <- currency_codes_page %>% html_nodes("td:nth-child(3)") %>% html_text()
+
+## clean currency_codes to get rid of the blank values
+
+currency_codes <- currency_codes[nchar(currency_codes)==3]
+```
+lets take a look at the currency codes we have in our data frame, some of them will need converting to standardized currencies. 
+
+```{r}
+#codes_dirty includes some extras, just need to get the ones with 3 characters
+codes_dirty <-gsub("[^A-Z.-]","",c(Movies_Clean$budget,Movies_Clean$opening_weekend,Movies_Clean$gross_world)) %>% 
+  .[.!=""] %>% 
+  .[!is.na(.)] %>% 
+  unique(.) 
+
+codes_clean <- codes_dirty[nchar(codes_dirty)==3]
+```
+remove none standardized currencies, we can add them back manually after.
+```{r}
+codes_removed <- codes_clean[!codes_clean %in% currency_codes]
+
+codes_clean <- codes_clean[!codes_clean %in% codes_removed]
+```
+
+as we can see there are 17 different currency codes in the data frame split between the three columns; budget, opening_weekend, and gross_world.
+
+
+
+### currency code conversion rate data frame
+
+lets create a dataframe with conversion rates that we can call later.
+
+
+
+```{r}
+# function for getting conversion rates from the currency codes.
+currency_convertor<- function(currency_code) {
+  link <- paste("https://www.xe.com/currencyconverter/convert/?Amount=1&From=",
+                currency_code,"&To=USD",sep = "")
+  page <- read_html(link)
+  conversion_rate <- page %>% html_nodes(".iGrAod , .faded-digits") %>% html_text() 
+  return(conversion_rate)
+}
+```
+
+```{r}
+##apply the currency convertor function
+ conversion_rates <- sapply(codes_clean,currency_convertor)
+ #transform output into a dataframe, and then convert to longer 
+ #version
+ conversion_rates_df <- as.data.frame(conversion_rates, stringsAsFactors =
+                                        FALSE)
+ conversion_rates_df <- as.data.frame(t(conversion_rates_df))
+```
+
+clean up for the conversion rate dataframe
+```{r}
+## add index
+conversion_rates_df$currency_codes <- row.names(conversion_rates_df)
+rownames(conversion_rates_df) <- 1:nrow(conversion_rates_df)
+## remove V2 (useless info from scraping )
+conversion_rates_df <- conversion_rates_df %>% 
+  select(currency_codes, Conversion=V1) 
+##manually add conversion (est)for the 5 depreciated currencies
+conversion_rates_df <- 
+  rbind(conversion_rates_df, data.frame(currency_codes=c("DEM","FRF","ITL","NLG","ESP"),
+                                        Conversion=c("1.7293","0.172386","0.000581922", "0.513146","0.339349 ")))
+
+## clean and change to numeric
+conversion_rates_df$Conversion<- 
+  as.numeric(gsub("[^0-9.-]", "", conversion_rates_df$Conversion))
+```
+
+
+```{r}
+## function to get currency codes for other columns
+##NOTE: should just change this to accept vectors.
+
+get_conversion_rates <- function(col_name) {
+## i should cut this part of the function down.
+  #a lot isnt needed and its ugly.
+  col_name_new <-"opening_weekend"
+  col_name_new <- paste("Movies_Clean$",substr(col_name,1,4),
+                    sep = "")
+col_name_suffix <- paste(substr(col_name,1,4),"Converted")
+col_name_new <- gsub("[:upper:]","",Movies_Clean[,col_name]) 
+col_name_new <- str_trim(col_name_new)
+col_name_new <- gsub("[^A-Z]","",col_name_new)
+col_name_new[nchar(col_name_new) <3] <-NA
+col_name_new <- substr(col_name_new,1,3)
+
+#find cols with a currency code, match them to the conversion rate
+## in the conversion_rates data frame.
+for (i in 1:length(col_name_new)) {
+  if  (col_name_new[i] %in% conversion_rates_df$currency_codes) {
+    col_name_new[i] <- conversion_rates_df$Conversion[col_name_new[i]==conversion_rates_df$currency_codes]
+  }}
+
+## clean col to only get the value.
+Movies_Clean[,col_name] <- str_trim(Movies_Clean[,col_name])
+#remove everything after the currency.
+Movies_Clean[,col_name] <-sub(" .*","",Movies_Clean[,col_name])
+#remove all none numeric characters.
+Movies_Clean[,col_name] <- gsub("[^0-9.-]","",Movies_Clean[,col_name])
+#create new col with USD values.
+Movies_Clean[,col_name_suffix] <-as.numeric(Movies_Clean[,col_name]) * 
+  as.numeric(col_name_new)
+## need to change NA values in new column for pre-exising
+## values in the OG column.
+for (i in 1:length(Movies_Clean[,col_name])) {
+  if (is.na(Movies_Clean[,col_name_suffix][i])) {
+    Movies_Clean[,col_name_suffix][i] <- Movies_Clean[,col_name][i]
+  }
+}
+Movies_Clean$openning_USD
+return(Movies_Clean[,col_name_suffix])
+}           
+```
+
+apply to above function to the three money columns.
+```{r}
+## get cleaned budget in USD.
+Movies_Clean$budget_USD <- as.integer(get_conversion_rates("budget"))
+
+## get the cleaned opening_weekend in USD.
+Movies_Clean$openning_USD <- as.integer(get_conversion_rates("opening_weekend"))
+## get cleaned gross in USD
+Movies_Clean$gross_USD <- as.integer(get_conversion_rates("gross_world"))
+```
+
+## now we can adjust for inflation. 
+
+note: this isnt a comprehensive adjustment since im adjusting the USD value not the orignal currency. For the sake of time and the scope of this project i dont think this will be a huge deal.
+
+```{r}
+## equation for inflation: CPI_today/CPI_year xusd_year =usd_today
+
+## first we need to get CPI values for every year from 1970 to 2021. (2021 CPI are averaged from the final 2 quarters of 2020 and the first 2 of 2021.)
+
+CPI_resource <- read_html("https://www.usinflationcalculator.com/inflation/consumer-price-index-and-annual-percent-changes-from-1913-to-2008/")
+
+tables <- CPI_resource %>% html_table(fill=TRUE)
+view(tables)
+CPI_df <- tables[[1]] %>% 
+  select(X1,X14)
+colnames(CPI_df) <-c("Year","Annual_CPI")
+
+## remove the two top rows, these were the OG names from the website table. dont need them.
+CPI_df <- CPI_df[3:nrow(CPI_df),]
+
+
+```
+## add a multipier column to the CPI_df
+
+i.e the amount the currency in a given year should be mulitplied by to account for inflation.
+
+```{r}
+## convert CPI to numeric.
+CPI_df$Annual_CPI <-as.numeric(CPI_df$Annual_CPI)
+for (i in 1:nrow(CPI_df)) {
+  ## 277.948 is the estimated CPI for 2021.
+  CPI_df$multiplier[i] <- 277.948/CPI_df$Annual_CPI[i]
+}
+```
+
+
+## function to apply inflation rate to our data
+```{r}
+apply_inflation <- function(x) {
+  for (i in 1:nrow(Movies_Clean)) {
+    x[i] <- x[i] * CPI_df$multiplier[CPI_df$Year ==Movies_Clean$year[i]]
+  }
+  return(x)
+}
+```
+
+```{r}
+##test
+Movies_Clean
+##test
+```
+
+
+
+## apply function to the 3 columns.
+```{r}
+
+
+Movies_Clean$budget_USD <- apply_inflation(Movies_Clean$budget_USD)
+
+Movies_Clean$gross_USD <- apply_inflation(Movies_Clean$gross_USD)
+
+Movies_Clean$openning_USD <-apply_inflation(Movies_Clean$openning_USD)
+```
+
+
+## clean awards
+
+starting with oscar wins.
+```{r}
+##clean awards columns, separate into Oscar wins, Oscar nominations
+##and other nominations.
+Movies_Clean$awards <- str_trim(Movies_Clean$awards)
+
+## function to get just the number related to oscar wins
+  
+for (i in 1:nrow(Movies_Clean)) {
+  if (grepl("Oscar.*",Movies_Clean$awards[i]) ==TRUE ) {
+    Movies_Clean$Oscar_wins[i] <- gsub("Oscar.*","",Movies_Clean$awards[i])
+  } else {
+    Movies_Clean$Oscar_wins[i] <-0
+  }
+}
+  for (i in 1:nrow(Movies_Clean)) {
+    if(grepl("Nomin.*",Movies_Clean$Oscar_wins[i]) ==TRUE) {
+      Movies_Clean$Oscar_wins[i] <- (gsub("[0-9^]","",
+                                         Movies_Clean$Oscar_wins[i]))
+    }
+  }
+## clean the returned string to just get the number
+Movies_Clean$Oscar_wins[is.na(Movies_Clean$Oscar_wins)] <- 0
+Movies_Clean$Oscar_wins <-as.integer(gsub("[a-z,A-Z]","",Movies_Clean$Oscar_wins))
+
+
+
+```
+
+oscar nominations
+```{r}
+######Oscar nominations
+for (i in 1:nrow(Movies_Clean)) {
+  if (grepl("Oscar.*",Movies_Clean$awards[i]) ==TRUE ) {
+    Movies_Clean$Oscar_nominations[i] <- gsub("Oscar.*","",Movies_Clean$awards[i])
+  } else {
+    Movies_Clean$Oscar_nominations[i] <-0
+  }
+}
+for (i in 1:nrow(Movies_Clean)) {
+  if(grepl("Won.*",Movies_Clean$Oscar_nominations[i]) ==TRUE) {
+    Movies_Clean$Oscar_nominations[i] <- (gsub("[0-9^]","",
+                                        Movies_Clean$Oscar_nominations[i]))
+  }
+}
+#extract the number of awards
+Movies_Clean$Oscar_nominations <-gsub("[a-z,A-Z]","",Movies_Clean$Oscar_nominations)
+
+## make blank records Na and convert to int
+Movies_Clean$Oscar_nominations <- str_trim(Movies_Clean$Oscar_nominations)
+Movies_Clean$Oscar_nominations <-as.integer(gsub("^$|^ $",0,Movies_Clean$Oscar_nominations))
+
+
+
+```
+other wins
+
+```{r}
+##other wins
+## dont need to put this in  a for loop. do same as for other noms
+for (i in 1:nrow(Movies_Clean)) {
+  Movies_Clean$other_wins[i] <- gsub(" wins.* | .*Another ","",Movies_Clean$awards)[i]
+  Movies_Clean$other_wins[i] <-(gsub("[^0-9]","",Movies_Clean$other_wins[i]))
+  
+}
+
+## change blank values and NA to 0
+Movies_Clean$other_wins <- gsub("^$|^ $",0,Movies_Clean$other_wins)
+## convert to int
+Movies_Clean$other_wins <- as.integer(Movies_Clean$other_wins)
+
+```
+
+
+other nominations
+```{r}
+##other nominations
+Movies_Clean$other_nominations <- gsub(".*win","",Movies_Clean$awards)
+Movies_Clean$other_nominations <- as.integer(gsub("[^0-9]","",
+                                                  Movies_Clean$other_nominations))
+## change NA values to 0. 
+Movies_Clean$other_nominations[is.na(Movies_Clean$other_nominations)] <- 0
+
+```
+get rid of the NA values and replace with 0s.
+
+```{r}
+## some rows have no data for the awards. for these set all
+## rewards columns to 0
+Movies_Clean$Oscar_wins[is.na(Movies_Clean$Oscar_wins)] <-0
+```
+
+## trim synopsis
+```{r}
+Movies_Clean$synopsis <- str_trim(Movies_Clean$synopsis)
+```
+
+##clean run time
+
+```{r}
+Movies_Clean$run_time <- as.integer(gsub("[^0-9]","",
+                                         Movies_Clean$run_time))
+```
+
+
+##Remove old columns.
+
+```{r}
+Movies_Clean <- Movies_Clean %>% 
+  select(-gross_world,-opening_weekend,
+         -budget,-awards)
+```
+rearrange columns to be in a more intuitive order.
+
+```{r}
+Movies_Clean <-
+  Movies_Clean %>% 
+  select(name,year,rating,imdb_votes,run_time,genre1,genre2,budget_USD,openning_USD,gross_USD,Oscar_wins,Oscar_nominations,other_wins,other_nominations,director,cast,synopsis)
+```
+
+### final checks to see if everything looks okay
+```{r}
+summary(Movies_Clean)
+```
+
+potential issues:
+  * min IMDb_votes is 35, i set a filter to only get films with >2000 votes.
+  * min run time is 23 minutes, there should only be feature length movies.
+  *the minimum budget is $35.
+  
+  lets look at these one at a time.
+  
+```{r}
+(Movies_Clean[Movies_Clean$imdb_votes==35,])
+
+Movies_Clean <- Movies_Clean[-c(419),]
+Movies_Clean[419,]
+```
+the Movie that only has 35 votes is also the movie thats only 23minutes long. its an epsiode of a series, not sure how it ended there but we can just remove it.
+
+
+lets see if that has fixed the issue. now the minimum votes and minimum runtime make a lot more sense.
+```{r}
+summary(Movies_Clean)
+```
+
+
+now to deal with the $13 budget.
+
+there are a few movies that have worrying low budgets, more than likely the estimation on their budgets in wrong. solving these problems is past the scope of this project so im just going to set a threshold and remove the few movies that fall with in it.
+
+```{r}
+Movies_Clean <- Movies_Clean %>% 
+  filter(budget_USD >7500)
+```
+
+the dataframe is good to go, with 3006 movies.
