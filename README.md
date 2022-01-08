@@ -18,7 +18,7 @@ The project was split into three main sections:
  ![](https://github.com/thickett/IMDB_webscraping_analysis/blob/main/images/cleaning_example_r.PNG)
  
  
- ### Exploratory analysis and feature engineering 
+ ### 3) Exploratory analysis and feature engineering 
  * Created compelling data vizulizations to outline the scope of the data.
  * Identified key trends and relationships.
  * Feature engineered several new variables  all of which played a pivital role in the success of the predictive model.
@@ -26,7 +26,7 @@ The project was split into three main sections:
  * Utalised KNN regression to add localised structural information of the data, and to create a new predictor variable.
  
  
- ### Model building and predictions.
+ ### 4) Model building and predictions.
  
  * Produced a predictive model that made use of mutliple confounding regression algorithims such as:
   * Elastic net regression.
