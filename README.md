@@ -18,16 +18,21 @@ The project was split into three main sections:
  ![](https://github.com/thickett/IMDB_webscraping_analysis/blob/main/images/cleaning_example_r.PNG)
  
  
- ### exploratory analysis and feature engineering 
- * created compelling data vizulizations to outline the scope of the data.
- * identified key trends and relationships
- * feature engineered several new variables  all of which played a pivital role in the success of the predictive model.
- * utalised KNN regression to add localised structural information of the data, and to create a new predictor variable.
+ ### Exploratory analysis and feature engineering 
+ * Created compelling data vizulizations to outline the scope of the data.
+ * Identified key trends and relationships.
+ * Feature engineered several new variables  all of which played a pivital role in the success of the predictive model.
+ * Normalized the data to ensure distance based, and gradient decent based algorithims performed optimally.
+ * Utalised KNN regression to add localised structural information of the data, and to create a new predictor variable.
  
  
- ### model building and predictions.
+ ### Model building and predictions.
  
- * produced a predictive model that made use of mutliple confounding regression algorithims such as:
-  * elastic net regression
-  * random forests
-  * XGboost regression trees
+ * Produced a predictive model that made use of mutliple confounding regression algorithims such as:
+  * Elastic net regression.
+  * Random forests.
+  * XGboost regression trees.
+ * Took measures to ensure the predictive model worked well on un-seen data by:
+ * Making use of holdout datasets.
+ * K-fold cross validation.
+
