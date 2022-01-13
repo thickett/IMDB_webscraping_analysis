@@ -73,7 +73,7 @@ Movies_Clean$imdb_votes <- extra_char_cleaner(Movies_Clean$imdb_votes,
 ### cleaning budgets variable.
 
 
-here we have budgets in a variety of currencies, i will convert them all to USD through use of  a webscraper. 
+here we have budgets in a variety of currencies, i will convert them all to USD through use of  a web scraper. 
 
 
 first we need to remove free space from the budget.
@@ -82,7 +82,7 @@ first we need to remove free space from the budget.
 Movies_Clean$budget <-str_trim(Movies_Clean$budget)
 
 ```
-scrape all possible currency codes. then we can just see which of these exist in our dataframe.
+scrape all possible currency codes. then we can just see which of these exist in our data frame.
 
 ```{r}
 currency_codes_link<-"https://www.iban.com/currency-codes"
@@ -206,7 +206,7 @@ return(Movies_Clean[,col_name_suffix])
 }           
 ```
 
-apply to above function to the three money columns.
+apply the above function to the three money columns.
 ```{r}
 ## get cleaned budget in USD.
 Movies_Clean$budget_USD <- as.integer(get_conversion_rates("budget"))
@@ -263,11 +263,6 @@ apply_inflation <- function(x) {
 }
 ```
 
-```{r}
-##test
-Movies_Clean
-##test
-```
 
 
 
@@ -280,6 +275,12 @@ Movies_Clean$budget_USD <- apply_inflation(Movies_Clean$budget_USD)
 Movies_Clean$gross_USD <- apply_inflation(Movies_Clean$gross_USD)
 
 Movies_Clean$openning_USD <-apply_inflation(Movies_Clean$openning_USD)
+```
+
+Finally, after taking a further look at the data there seems to be an issue with budget. for some of the movies that have less available information, the budget scraped from the web is actually the opening weekend or gross. To solve this i'm going to make all budgets NA if they don't have an opening weekend value associated with them. This isnt an ideal with to deal with the issue. However, due to the amount of data missing in these columns i doubt it will be an issue. I'm probably going to end up using these as factor variables, and it wont matter if some indiviudal recrods are slightly wrong.
+
+```{r}
+Movies_Clean$budget_USD[is.na(Movies_Clean$openning_USD)] <-NA
 ```
 
 
@@ -388,14 +389,47 @@ Movies_Clean$synopsis <- str_trim(Movies_Clean$synopsis)
 Movies_Clean$run_time <- as.integer(gsub("[^0-9]","",
                                          Movies_Clean$run_time))
 ```
+## clean genres, this mainly involes getting rid of the NAs. for this ill just set genre 2 equal to genre 1 when no genre 2 is provided.
+
+```{r}
+Movies_Clean$genre2[is.na(Movies_Clean$genre2)] <- Movies_Clean$genre1[is.na(Movies_Clean$genre2)]
+```
+
+## clean cast, this will involve seperating each of the 5 actors for each movie into their own column, this will make analysis much easier.
+
+```{r}
+## the first order of business is to split the current vector (length 1) into a vector of lenngth 5, i.e so each actor can be called individually, at the momeny its essentially a string stored as a vector.
 
 
-##Remove old columns.
+Movies_Clean$cast <- strsplit(Movies_Clean$cast,",")
+
+## now each of the 5 actors in a movie can be called individually, this means we can simply iterate through the data frame and assign each actor to its own column.
+
+actor_split <- function(){
+  for (actor in 1:5){
+    col_name <- paste0("actor",actor)
+    Movies_Clean[,col_name] <-NA
+    for (i in 1:nrow(Movies_Clean)){
+      
+      Movies_Clean[,col_name][i] <- Movies_Clean$cast[[i]][actor]
+    }
+  }
+  return(Movies_Clean)
+}
+
+Movies_Clean <-actor_split()
+
+
+
+```
+
+
+Remove old columns.
 
 ```{r}
 Movies_Clean <- Movies_Clean %>% 
   select(-gross_world,-opening_weekend,
-         -budget,-awards)
+         -budget,-awards,-synopsis,-cast)
 ```
 rearrange columns to be in a more intuitive order.
 
