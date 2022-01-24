@@ -1,0 +1,787 @@
+---
+title: "IMDb_analysis"
+author: "Callum Thickett"
+date: "13/01/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## IMDb analysis.
+
+
+In this portion of the project i will be focusing on exploratry data analysis, feature engineering, and finally modelling and predictions.
+
+
+### Setting up the data for exploratory data analysis.
+
+*this will be deleted/moved to top when i put it all into 1 markdown*
+```{r}
+library(tidyverse)
+library(ggpubr)
+library(corrplot)
+library(caret)
+library(xgboost)
+library(grid)
+library(glmnet)
+library(randomForest)
+library(psych)
+library(scales)
+library(ggrepel)
+```
+
+*import data, when i use full thing i wont need this since cleaned data set will be here from the cleanbing section.*
+
+```{r}
+Movies <- read.csv("Movies_Clean.csv")
+
+## one of the Movies seems to have imported incorrectly. for now we're going to remove it.
+summary(Movies)
+
+```
+
+## first we need to do a little clean up, it seems like there are some rows that havnt been properly formated. For now, since there are only 3 im just going to remove them.
+
+
+```{r}
+## remove rows that have incorrect formating
+Movies <- Movies[c(-3366,-82,-339,-369),]
+
+
+## set other wins NAs to 0.
+
+Movies$other_wins[is.na(Movies$other_wins)] <-0
+
+```
+
+
+
+## first lets split our data into a training and test set.
+
+
+
+
+```{r}
+set.seed(123)
+pct <-0.8
+df <- sample(nrow(Movies),nrow(Movies)*pct,replace=FALSE)
+
+train <-Movies[df,]
+test <-Movies[-df,]
+
+paste("There are",nrow(train),"samples in the training data set, and",nrow(test),"in the test data set.   This is a ", pct*100,":",100-pct*100,
+      "split.")
+```
+
+for feature engineering purposes, ill combine the two back together. But it is important to note that the data in the test data frame *will not* be used in any of the analsis, or in creating new features or predictive models.
+
+```{r}
+## First, we will store the rating scores for the test data to use at the end. we can then remove it, and combine it with the rest of the data to ensure we dont accidently use any of the training data for training purposes.
+test_ratings <- test$rating
+
+test$rating <-NA
+
+all <- rbind(train,test)
+glimpse(all)
+```
+
+lets do a quick check of na values
+
+```{r}
+nulcols <-all %>% 
+  select(-rating) %>% 
+  sapply(.,function(x) sum(is.na(x))) %>% 
+  data.frame() %>% 
+    rownames_to_column(var="Categories") 
+
+colnames(nulcols) <- c( "Categories","Count")
+
+nulcols %>% 
+  filter(Count > 0)
+```
+
+There are only three columns with na, and its the three we expect.(excluding rating) 
+
+
+
+
+### Exploratory data analysis
+
+In this section we will explore the data a bit more, see how the predictor and outcome variables are related, and find areas that we can work on and improve in the feature engineering section.
+
+
+To start lets see if our dependent variable is normally distributed, this is an essential part that will dictate whether or not our predictive models will work.
+```{r}
+ggdensity(all$rating,na.rm=TRUE)
+```
+As can been in the density plot, the data is fairly normal by it seems to be slightly skewed with a longer tail on the left. This can be seen more easily by reviewing a qqplot.
+
+
+```{r}
+ggqqplot(all$rating,)
+
+skew(all$rating)
+```
+As could be seen, the data is slightly skewed to the left, this will of course have some effect on metrics that estimate location (i.e median and mean), although the skew is small enough for us to assume normal distribution and continue without transformation of the outcome variable. 
+
+
+
+#### Lets take an initial look at how our numeric variables correlate to rating.
+
+
+```{r}
+
+## lets start of by getting just the numeric columns.
+numeric_var_names <- which(sapply(all, is.numeric))
+
+numeric_vars <- all[,numeric_var_names]
+
+## find the correlation between all variables, which allows us to create a correlation matrix
+cor_numeric_vars <-cor(numeric_vars,use="pairwise.complete.obs") ##pairwise.complete.obs used to take care of the NA values.
+
+
+## now we can sort by rating, simply to give us an order so our correlation matrix is easier to read.
+cor_sorted <- as.matrix(sort(cor_numeric_vars[,"rating"],decreasing = TRUE))
+
+Cornames <- names(which(apply(cor_sorted, 1, function(x) abs(x)>0)))
+
+cor_numeric <-cor_numeric_vars[Cornames,Cornames]
+
+corrplot.mixed(cor_numeric, tl.col="black", tl.pos = "lt")
+```
+It's clear from the above plot that none of the numeric predictors as they currently stand are particularly amazing. many of these will improve dramatically after some feature engineering. This correlation matrix also gives us a good initial indication as to whether or not we would run into multicolinearity issues, which can cause problems from some algorithms (e.g ones that are related to linear regression)
+
+
+No two predictors correlate that well with each other, meaning none are redundant and therefore we shouldn't have issues with multiolinearity.
+
+
+
+
+### lets take a look at our outcome variable a little more, aswell as our current best numeric predictors. 
+
+```{r}
+
+all %>% 
+  filter(!is.na(rating)) %>% 
+  ggplot(aes(imdb_votes,rating)) +
+  geom_point()
+
+```
+
+here we can see there is a hugely different magnitude between the smallest and largest values, taking the log of this predictor should increase correlation, but this is something that will be dealt with later.
+
+### IMDb votes exploration
+
+lets see if year effects imdb_votes effect on rating (it could be possible that old movies i.e from the 70s would have less votes)
+
+```{r}
+## variables for arrows and text
+
+y.94 <- as.integer(VotesVTime %>% 
+  filter(year==1994) %>% 
+  .[1,2])
+  
+
+VotesVTime <-all %>% 
+  filter(!is.na(rating),) %>% 
+  group_by(year) %>% 
+  summarise(avg.imdb_votes = median(imdb_votes))
+
+VotesVTime %>% 
+  ggplot(aes(year,avg.imdb_votes,fill=avg.imdb_votes)) +
+  geom_col() +
+  theme_classic2() +
+  theme(legend.position = 0) +
+  scale_y_continuous(labels = comma) +
+  labs(y="Median IMDb Votes", title="The change in average IMDb votes over time.") +
+  geom_smooth(se=FALSE,colour="purple")+
+    scale_fill_gradient() 
+  
+```
+
+Clearly, inflation is taking place as the internet and IMDb become more popular overtime, giving older movies a disadvantage. This is something that should be addressed in the feature engineering section.
+
+
+lets take a quick look at the outlier year in the early/mid 2000s.
+
+```{r}
+all %>% 
+  filter(!is.na(rating),) %>% 
+  group_by(year) %>% 
+  summarise(avg.imdb_votes = median(imdb_votes)) %>% 
+  arrange(desc(avg.imdb_votes)) %>% 
+  head(3)
+  
+```
+2004 seems to be the year lets see what big movies were released in that year.
+
+```{r}
+all %>% 
+  filter(!is.na(rating), year==2004) %>% 
+  select(name,imdb_votes,rating) %>% 
+  arrange(desc(imdb_votes)) %>% 
+  head(10)
+```
+
+```{r}
+med.count <-all %>% 
+  filter(!is.na(rating)) %>% 
+  group_by(year) %>% 
+  summarise("Movie_Count" =n()) %>% 
+  summarise("Median Movies per year"=median(Movie_Count))
+
+count.2004 <- all %>% 
+  filter(!is.na(rating),year==2004) %>% 
+  group_by(year) %>% 
+  summarise(" Movies from 2004" =n()) %>% 
+  .[1,2]
+
+cbind(med.count,count.2004)
+ 
+```
+
+I thought that it was possible that we simply didn't have many sample movies from that year which lead to an inaccurate representation, but it seems like we have a perfectly normal amount. Lets see if the movies sampled from that year are generally higher rated compared to the average.
+
+```{r}
+med.rating <-all %>% 
+  filter(!is.na(rating)) %>% 
+  group_by(year) %>% 
+  summarise("median_rating" =median(rating)) %>% 
+  summarise(median(median_rating))
+
+med.rating.2004 <- all %>% 
+  filter(!is.na(rating),year==2004) %>% 
+  group_by(year) %>% 
+  summarise("Average Movie rating, 2004" =median(rating)) %>% 
+  .[1,2]
+
+cbind(med.rating,med.rating.2004)
+
+```
+
+
+The average rating from 2004 seems to be slightly higher than average, but shouldn't be a reason for such a huge spike in average IMDb votes, further analysis would be needed to reach a conclusion here but it's possible 2004 was just a good year for movies!
+
+### Non numeric variables
+
+Before we start feature engineering lets see if we can learn anything for the non-numeric variables
+
+### director
+
+first ill create a dataframe that shows the median rating of all directors Movies, aswell as the number of Movies they have directed in the training data set.
+```{r}
+director.df <-all %>% 
+  filter(!is.na(rating)) %>% 
+  group_by(director) %>% 
+  summarise("Median_rating"=median(rating),n()) %>% 
+  arrange(desc(Median_rating))
+  
+head(director.df)
+```
+
+An issue arises, a bunch of directors only have 1 data point in the training data set.We will have to take for this when creating our features. 
+
+Despite this, the director very clearly, and rather intuitively effects a movies rating substantially 
+
+
+```{r}
+## median rating variable
+median.rating <- all %>% 
+  filter(!is.na(rating)) %>% 
+  summarise(median(rating)) %>% 
+  .[1,1]
+
+director.df %>% 
+  ggplot(aes(reorder(director,Median_rating),Median_rating)) +
+  geom_point() +
+  geom_hline(yintercept = median.rating, colour="red",linetype="dashed") +
+  theme_bw()+
+  geom_text(aes(x=120,y=6.5),label=paste("Median rating:",median.rating),colour="black",check_overlap = T) +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank()) +
+  labs(title = "The median rating of each Director.",
+       subtitle = "Names have not been included to remove clutter")
+```
+
+## Feature Engineering
+
+
+In this section we will go through our predictor variables one by one and see how they can be manipulated, combined, or used to create new variables to improve predictability of our future model. 
+
+
+### Director
+
+
+I think i reasonable way of improving this particular variable is to convert it to ordinal data, where directors are categorized based on their average Movie rating. If a director isn't in the training data ill just put them in the central group. (note: to improve this, it could be worth looking at the most common genre of movie these directors make and use that to choose what group they go in. i.e horror Movie directors will typically have lower ratings than drama directors.)
+
+```{r}
+
+## the quantiles we want to use to split the groups
+director.quantiles <- c(0.05,0.15,0.35,0.65,0.75,0.85,0.95)
+
+## setting the value of the highest ranked group
+director.df$director_rating <- length(director.quantiles) +1
+
+## setting the value for all subsequent categories
+
+for (i in 1:length(director.quantiles)) {
+  director.df$director_rating[!director.df$director %in% head(director.df$director, floor(nrow(director.df))*director.quantiles[i])] <-length(director.quantiles)+1 - i
+}
+
+```
+
+Now to create a column in all that corresponds to these ratings.
+
+```{r}
+for (i in 1:nrow(all)) {
+  if (all$director[i] %in% director.df$director==TRUE){
+    all$director_rating[i] <- director.df$director_rating[all$director[i] == director.df$director]
+  }
+}
+```
+
+lets see how good it is and see if it needs changing.
+
+```{r}
+cor(all$rating,all$director_rating,use="pairwise.complete.obs")
+```
+we have to take into consideration that many of the directors on here only have 1 movie, that isnt enough information to catergorise them correctly, it may be better to simply put these in the middle group.
+
+```{r}
+all %>% 
+  filter(!is.na(rating)) %>% 
+  ggplot(aes(director_rating,rating)) +
+  stat_summary(fun="median",geom = "bar") 
+
+
+cor(all$rating,all$director_rating,use="pairwise.complete.obs")
+```
+
+
+## actors
+
+I think it makes sense to treat actors in much the same way as directors, of course here we have 5 actor columns, ill simply do the same as above for each of the 5 and average out the resultant value. It may be worth applying a weight to actors that are listed earlier (i.e the top credited actor), but we can experiment and see if that's needed.
+
+
+
+We need to start by assigning each actor to a category
+```{r}
+##A function to assign a score to each actor in the dataframe (including actors from all 5 columns.)
+
+actor.score <- function() {
+  actor.df <-data.frame() 
+  for (i in 1:5){                 ##iterate through the 5 actor columns
+    col_name <- paste0("actor",i) 
+    med_rating <- all %>%  ##get the medium rating for actors in a column
+      filter(!is.na(rating)) %>% 
+      group_by(all %>% filter(!is.na(rating)) %>% .[,col_name]) %>% 
+      summarise(med.rating=median(rating))
+    actor.df <- rbind(actor.df,med_rating) ## put all the results into a dataframe
+    
+    
+  }
+  names(actor.df)[1]<-"Actor"
+  
+  actor.df <- actor.df %>%   ## get median rating for each unique actor.
+    group_by(Actor) %>% 
+    summarise(rating =median(med.rating)) %>% 
+    arrange(desc(rating))
+  
+  return(actor.df)
+  
+}
+
+actor.df <- actor.score()
+```
+*Current issue with above method is that its probably overfit to the training data. many of the actors only have 1 or 2 roles documented. this isnt a good enough sample to get an accurate representation of their avg movie score. It probably makes more sense to simply put hte into groups i.e bad actor, ok actor, good actor, great actor. That should result in a more applicable feature.*
+
+
+
+
+Now we need to apply the actor scores to actors in our data frame, and assign and overall score for each movie based on the 5 top credited actors. 
+
+
+
+
+
+```{r}
+
+all$actor_score <-0
+for (i in 1:5) {
+  col_name <- paste0("actor",i)
+  for (j in 1:nrow(all)) {
+    if(all[,col_name][j] %in% actor.df$Actor) {
+      all$actor_score[j] <- all$actor_score[j] +actor.df$rating[actor.df$Actor ==all[,col_name][j]]
+    } else{
+      all$actor_score[j] <-all$actor_score[j] +5
+    }
+  }
+}
+
+```
+There are a bunch of actors in the test set that arnt present in the training set. This means they dont have an associated value with them. For now, i have assigned an abritery value to these actors. *I will need to come back and find an appropriate way to assign values to these. for the time being though it will have to do.*
+
+
+
+
+
+
+```{r}
+cor(all$actor_score,all$rating,use = "pairwise.complete.obs")
+```
+
+as we can see the correlation in the training data is very high. in reality this is just because it is over fit to the training data. this is something i may have to comeback to and address. a holdout set may be needed.
+
+
+## awards
+
+as it stands the awards variables dont offer much in terms of predictive power, i think we can solve that by combining the three variables, applying different weights to each caregory.
+
+```{r}
+all$award_score <- all$Oscar_wins +all$Oscar_nominations +all$other_wins*0.05 +
+  all$other_nominations*0.05
+
+cor(all$rating,all$award_score,use = "pairwise.complete.obs")
+
+```
+
+
+
+### genre
+
+
+
+```{r}
+
+
+median_ratings_genre1 <-all %>% 
+  filter(!is.na(rating)) %>% 
+  group_by(genre1) %>% 
+  summarise(median_rating = median(rating),count=n()) %>% 
+  arrange(desc(median_rating)) 
+
+median_ratings_genre1 %>% 
+  ggplot(aes(reorder(genre1,median_rating),median_rating)) +
+  geom_point() +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) +
+  labs(x="Genres",
+       title="Genres affect on rating",
+       subtitle = "the extremes are labelled with genre name, and how frequent they appear in the database")
+```
+
+```{r}
+median_ratings_genre2 <-all %>% 
+  filter(!is.na(rating)) %>% 
+  group_by(genre2) %>% 
+  summarise(median_rating = median(rating),count=n()) %>% 
+  arrange(desc(median_rating)) 
+
+median_ratings_genre2 %>% 
+  ggplot(aes(reorder(genre2,median_rating),median_rating)) +
+  geom_point() +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) +
+  labs(x="Genres",
+       title="Genres affect on rating",
+       subtitle = "the extremes are labelled with genre name, and how frequent they appear in the database")
+```
+
+Bother genre1 and genre 2 seem to have an effect on rating, we may however see a better result if we combine the two together
+
+```{r}
+
+all$genres <- paste(all$genre1, all$genre2)
+
+median_ratings_genres <-all %>% 
+  filter(!is.na(rating)) %>% 
+  group_by(genres) %>% 
+  summarise(median_rating = median(rating),count=n()) %>% 
+  arrange(desc(median_rating)) 
+
+median_ratings_genres %>% 
+  ggplot(aes(reorder(genres,median_rating),median_rating)) +
+  geom_point() +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) +
+  labs(x="Genres",
+       title="Genres affect on rating",
+       subtitle = "the extremes are labelled with genre name, and how frequent they appear in the database") +
+  geom_text_repel(aes(label=ifelse(median_rating >7.7 |median_rating <4.5,
+                                   paste(genres,
+                                         count)
+                                   ,""))) 
+  
+## set them to be factor variables (for now, i may change this.)
+
+all$genre1 <- as.factor(all$genre1)
+all$genre2 <- as.factor(all$genre2)
+
+
+```
+
+again, there's a clear trend here and it seems that some genres are for sure better in terms of getting a higher rating, however, many of the categoires only have a few data points in them. Because of this, it would be better to more broadly categories them, or remove genres that have few data points when creating dummy variables. 
+
+
+### opening, budget, and gross
+
+```{r}
+nulcols <-all %>% 
+  select(-rating,gross_USD,budget_USD,openning_USD) %>% 
+  sapply(.,function(x) sum(is.na(x))) %>% 
+  data.frame() %>% 
+    rownames_to_column(var="Categories") 
+
+colnames(nulcols) <- c( "Categories","Count")
+
+nulcols %>% 
+  filter(Count > 0)
+```
+As we can see, over half of all the records have an NA value in atleast one of the three columns, because of this itll be hard to use these variables without going back and filling in the missing data.
+
+
+For now im going to use them to create a new factor variable, with the idea that Movies that have a recorded budget, oppenning, and gross are more likely to have been succesful movies, and thus higher rated.
+
+
+```{r}
+all$Money.present <- as.factor(ifelse(is.na(all$gross_USD +all$budget_USD +all$openning_USD ), 0,1))
+```
+
+```{r}
+all %>% 
+  filter(!is.na(rating)) %>% 
+  ggplot(aes(Money.present,rating)) +
+  geom_boxplot()
+  
+```
+It would appear that movies that have data for all 3 variables do, on average score a higher rating. although the difference seems rather small and there's quite large variance, with several outlier points. 
+
+
+## Random forst for identifying variable importance.
+
+First we need to clean up the dataframe and remove unwanted/un-used variables.
+
+```{r}
+all <- all %>% select(c(-actor1,-actor2,-actor3,-actor4,-actor5,-budget_USD,
+                        -openning_USD,-gross_USD,-Oscar_wins,-Oscar_nominations,-other_wins,
+                        -other_nominations,-name,-director,-genres,-year))
+```
+
+
+since we're just using this for variable importance we can keep it simple, no need for cross validation or optimization. 
+
+
+```{r}
+
+RF_vars <-randomForest(x=all[!is.na(all$rating),-5],
+             y=all$rating[!is.na(all$rating)],
+             ntree=200,
+             importance=TRUE)
+
+varImpPlot(RF_vars,type = 1)
+```
+
+This essentially shows the effect of random permutation of each variable, which removes that variables predictive power, if it results in a higher MSE, then that variable has a large effect on the model and is more important of a variable. 
+
+
+
+## Pre-processing the data.
+
+
+
+We're going to be utalising KNN and other algorithms that are either distance based methods or gradient descent methods, both of these require standardization and normalization of numeric variables. we also need to create dummy variables from our categorical data.
+
+```{r}
+numericvars <- which(sapply(all,is.numeric))
+
+numericvars.df <- all[,numericvars] %>% select(-rating)
+
+factors.df <- all[,!names(all) %in% names(numericvars.df)] %>% select(-rating)
+```
+
+
+#### Skewness
+
+for our models to work we must assume our variables are normally distributed. an easy way to see if this assumption is true is by looking at the skewness of each variable, typically we look for a value between -1 and 1 for the assume to be true. for values our of this range we will take the log of them which should result in a more Gaussian distribution 
+
+```{r}
+for (i in 1:ncol(numericvars.df)) {
+  if (abs(skew(numericvars.df[,i]) >0.8)){
+    numericvars.df[,i] <- log(numericvars.df[,i] +1) 
+  }
+}
+```
+
+#### Normalizing the data
+
+```{r}
+PreProc <- preProcess(numericvars.df,method=c("center","scale"))
+print(PreProc)
+```
+
+```{r}
+norm.DF <- predict(PreProc,numericvars.df)
+```
+
+
+#### One hot encoding of the factor variables.
+
+
+```{r}
+dummies.df <- as.data.frame(model.matrix(~.-1 ,factors.df))
+```
+
+note: we use the -1 in the formula so we dont have an intercept value, or more accurately the intercept term is given the name its based on (since we want one hot encoding we dont need an intercept value, this would only be needed for linear regression where we would run into redundancy issues.)
+
+### cleaning up the dummy variables by removing those that either: are not present in the test data, or have fewer than 5 ones in the train set.
+
+
+
+```{r}
+emptylevels.test <- which(colSums(dummies.df[(nrow(all[!is.na(all$rating),])+1):nrow(all),])==0)
+
+## remove these levels from dummies.df
+
+dummies.df <-dummies.df[,-emptylevels.test]
+
+
+```
+
+Now to remove levels that are either not present, or are rarely present in the training data.
+
+```{r}
+emptylevels.train <- which(colSums(dummies.df[1:nrow(all[!is.na(all$rating),]),])<10)
+
+dummies.df <-dummies.df[,-emptylevels.train]
+```
+
+now we need to combine our numerics and dummy dataframes.
+
+```{r}
+all1 <- cbind(norm.DF,dummies.df)
+```
+
+
+
+
+### knn regression predictor.
+
+Finally i'll use a basic knn model to introduce local information to the model and create one last predictor. 
+
+
+Here we're going to be using the train function from caret to perform cross validation and find the ideal number for k.
+
+```{r}
+
+set.seed(123)
+
+train1 <- all1[!is.na(all$rating),]
+train1$rating <- train$rating
+test1 <- all1[is.na(all$rating),]
+
+## for knn we need to seperate the outcome variable form the predictor variables
+
+train.knn.x <-train1 %>% select(-rating)
+train.knn.y <- train$rating
+test.knn.x <- test1
+
+control <-trainControl(
+  method="cv",
+  number =10
+)
+
+knn.model <- train(x=train.knn.x,
+                   y=train.knn.y,
+                   method="knn",
+                   trcontrol=control,
+                   tuneLength=30)
+best.k <- knn.model$results$k[knn.model$results$RMSE==min(knn.model$results$RMSE)] ## select the best k value from the cross validation test.
+
+
+plot(knn.model)
+```
+
+here were using the best k value found in cross validation to create our actual model.
+```{r}
+knnreg.fit <-knnreg(x=train.knn.x,
+                    y=train.knn.y,
+                   method="knn",
+                   k=best.k)
+knn.pred.train <- predict(knnreg.fit,train.knn.x)
+mean((knn.pred.train-all$rating[!is.na(all$rating)])^2)
+
+knn.pred.test <- predict(knnreg.fit,test.knn.x)
+knn.pred <- append(knn.pred.train,knn.pred.test)
+
+all1$knn.pred <- knn.pred                  
+```
+
+```{r}
+# train1 <-all1[!is.na(all$rating),]
+# train1$rating <- all$rating[!is.na(all$rating)]
+# 
+# test1 <-all1[is.na(all$rating),]
+```
+
+
+### modelling 
+
+
+elastic net
+
+```{r}
+set.seed(321)
+
+rownames <- sample(nrow(train1),nrow(train1)*pct,replace=FALSE)
+
+
+train.net.x <- as.matrix(train1[rownames,] %>% select(-rating))
+train.net.y <- train1$rating[rownames]
+
+holdout.net.x <- as.matrix(train1[-rownames,] %>% select(-rating))
+holdout.net.y <- train1$rating[-rownames]
+
+```
+
+```{r}
+set.seed(543)
+
+alpha0.fit <- cv.glmnet(train.net.x,train.net.y,type.measure = "mse",
+                        alpha=0,family="gaussian")
+
+alpha.values <- seq(0,1,0.1)
+alpha.fits <- data.frame()
+for (i in 1:length(alpha.values)) {
+  temp.fit <-cv.glmnet(train.net.x,train.net.y,type.measure = "mse",
+                        alpha=alpha.values[i],family="gaussian",nfolds = 50)
+  temp.pred <-predict(temp.fit,newx=holdout.net.x,s=temp.fit$lambda.1se)
+  temp.df <- data.frame(alpha=(i-1)/10,
+                        MSE=mean(holdout.net.y-temp.pred)^2)
+  alpha.fits <- rbind(alpha.fits,temp.df)
+  
+}
+alpha.fits[alpha.fits$MSE==min(alpha.fits$MSE),]
+
+```
+as we can see from the above tests, an alpha value of 0 provides the best results. We will use this for our actual model.
+
+```{r}
+## creating test matrices based on our test1 set (this is completely unseen/new data data)
+test.x <- as.matrix(test1)
+test.y <- test_ratings
+
+
+alpha0.fit <- cv.glmnet(train.net.x,train.net.y,type.measure = "mse",
+                        alpha=0,family="gaussian")
+
+elastic.prediction <- predict(alpha0.fit,s=alpha0.fit$lambda.min,newx=test.x)
+
+
+mean((test.y-elastic.prediction)^2)
+
+
+```
+
