@@ -35,4 +35,4 @@ The project was split into three main sections:
  * Took measures to ensure the predictive model worked well on un-seen data by:
  * Making use of holdout datasets.
  * K-fold cross validation.
-
+![](https://github.com/thickett/IMDB_webscraping_analysis/blob/main/images/random_forest_MSE_imdb.JPG)
